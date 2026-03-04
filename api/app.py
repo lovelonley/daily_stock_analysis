@@ -31,15 +31,23 @@ from api.middlewares.auth import add_auth_middleware
 from api.middlewares.error_handler import add_error_handlers
 from api.v1.schemas.common import HealthResponse
 from src.services.system_config_service import SystemConfigService
+from src.monitor.sentinel import LiveSentinel
 
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     """Initialize and release shared services for the app lifecycle."""
     app.state.system_config_service = SystemConfigService()
+
+    # 启动盘中监控 (daemon 线程)
+    sentinel = LiveSentinel(interval=5)
+    sentinel.start_background()
+    app.state.sentinel = sentinel
+
     try:
         yield
     finally:
+        sentinel.stop()
         if hasattr(app.state, "system_config_service"):
             delattr(app.state, "system_config_service")
 
