@@ -237,28 +237,32 @@ const HomePage: React.FC = () => {
     const currentRequestId = ++analysisRequestIdRef.current;
 
     try {
-      // 使用异步模式提交分析
-      const response = await analysisApi.analyzeAsync({
-        stockCode: normalized,
-        reportType: 'detailed',
-      });
+      // 支持逗号分隔的多只股票
+      const codes = normalized.split(',').filter(Boolean);
+      for (const code of codes) {
+        try {
+          const response = await analysisApi.analyzeAsync({
+            stockCode: code,
+            reportType: 'detailed',
+          });
+          console.log('Task submitted:', code, response.taskId);
+        } catch (err) {
+          if (err instanceof DuplicateTaskError) {
+            console.log(`股票 ${code} 正在分析中，跳过`);
+          } else {
+            console.error(`分析 ${code} 失败:`, err);
+          }
+        }
+      }
 
       // 清空输入框
       if (currentRequestId === analysisRequestIdRef.current) {
         setStockCode('');
       }
-
-      // 任务已提交，SSE 会推送更新
-      console.log('Task submitted:', response.taskId);
     } catch (err) {
       console.error('Analysis failed:', err);
       if (currentRequestId === analysisRequestIdRef.current) {
-        if (err instanceof DuplicateTaskError) {
-          // 显示重复任务错误
-          setDuplicateError(`股票 ${err.stockCode} 正在分析中，请等待完成`);
-        } else {
-          setStoreError(err instanceof Error ? err.message : '分析失败');
-        }
+        setStoreError(err instanceof Error ? err.message : '分析失败');
       }
     } finally {
       setIsAnalyzing(false);
