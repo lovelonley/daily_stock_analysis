@@ -1,11 +1,13 @@
 """盘中实时预警主循环 — pytdx 扫描 + 分级告警 + 邮件通知"""
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
 from datetime import datetime
-from typing import Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
@@ -20,6 +22,16 @@ from src.monitor.alert_rules import (
 from src.monitor.market_scanner import MarketScanner
 
 logger = logging.getLogger(__name__)
+
+# 状态持久化文件 (收盘后保存当日摘要，开盘前读取)
+_STATUS_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "sentinel_status.json"
+
+LEVEL_NAMES = {
+    AlertLevel.NORMAL: "normal",
+    AlertLevel.WATCH: "watch",
+    AlertLevel.WARNING: "warning",
+    AlertLevel.DANGER: "danger",
+}
 
 # 跌停/涨停判定阈值 (pytdx 实时涨跌幅)
 # 主板 ±10%，创业板(30)/科创板(68) ±20%
@@ -54,6 +66,9 @@ class LiveSentinel:
         # 涨停板炸板监控
         self._early_limit_up: Optional[int] = None
         self._early_captured = False
+        # 最新告警结果 (供 API 读取)
+        self._last_result: Optional[AlertResult] = None
+        self._connected = False
 
     def start_background(self):
         """以 daemon 线程启动，供 FastAPI lifespan 调用"""
@@ -70,12 +85,105 @@ class LiveSentinel:
             self._thread.join(timeout=10)
         logger.info("Sentinel 盘中监控已停止")
 
+    def get_status(self) -> Dict[str, Any]:
+        """
+        返回当前监控状态，供 API 端点读取。
+
+        逻辑:
+        - 未连接 / 线程未运行 → phase=offline
+        - 交易时段有数据 → phase=live, 返回实时级别+快照
+        - 收盘后 (>=15:01) → phase=closed, 返回当日摘要
+        - 开盘前 (<9:15) → phase=pre_market, 读取上一次持久化的状态
+        - 午休 (11:30-13:00) → phase=lunch_break, 返回上午最新数据
+        """
+        now = datetime.now()
+        t = now.hour * 60 + now.minute
+        base: Dict[str, Any] = {"timestamp": now.isoformat()}
+
+        # 线程没跑或没连上
+        if not self._running and not self._connected:
+            # 尝试读持久化文件
+            saved = self._load_saved_status()
+            if saved:
+                return {**base, "phase": "pre_market", **saved}
+            return {**base, "phase": "offline", "level": "offline"}
+
+        # 开盘前
+        if t < 9 * 60 + 15:
+            saved = self._load_saved_status()
+            if saved:
+                return {**base, "phase": "pre_market", **saved}
+            return {**base, "phase": "pre_market", "level": "normal"}
+
+        # 收盘后
+        if t >= 15 * 60 + 1:
+            return {**base, "phase": "closed", **self._daily_summary()}
+
+        # 交易时段或午休 — 返回实时数据
+        if self._last_result is not None:
+            snap = self._last_result.snapshot
+            phase = "live"
+            if 11 * 60 + 30 < t < 13 * 60:
+                phase = "lunch_break"
+            return {
+                **base,
+                "phase": phase,
+                "level": LEVEL_NAMES.get(self._last_result.level, "normal"),
+                "confirmed": self._last_result.confirmed,
+                "reasons": self._last_result.reasons,
+                "snapshot": {
+                    "limit_down": snap.limit_down_count,
+                    "limit_up": snap.limit_up_count,
+                    "median_pct": round(snap.median_pct_change, 4),
+                    "csi300_pct": round(snap.csi300_pct_change, 4),
+                    "decline_ratio": round(snap.decline_ratio, 4),
+                },
+                "max_level_today": LEVEL_NAMES.get(self._max_level, "normal"),
+            }
+
+        return {**base, "phase": "live", "level": "normal"}
+
+    def _daily_summary(self) -> Dict[str, Any]:
+        """当日摘要数据"""
+        return {
+            "level": LEVEL_NAMES.get(self._max_level, "normal"),
+            "max_level_time": self._max_level_time,
+            "peak_limit_down": self._peak_limit_down,
+            "peak_limit_down_time": self._peak_limit_down_time,
+            "min_median": round(self._min_median, 4) if self._min_median < 999 else None,
+            "min_median_time": self._min_median_time,
+            "last_csi300": round(self._last_csi300, 4),
+        }
+
+    def _save_status(self):
+        """收盘时持久化当日状态"""
+        try:
+            _STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                **self._daily_summary(),
+            }
+            _STATUS_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        except Exception as e:
+            logger.warning("保存状态失败: %s", e)
+
+    def _load_saved_status(self) -> Optional[Dict[str, Any]]:
+        """读取持久化状态"""
+        try:
+            if _STATUS_FILE.exists():
+                data = json.loads(_STATUS_FILE.read_text(encoding="utf-8"))
+                return data
+        except Exception:
+            pass
+        return None
+
     def run(self):
         """主循环 (在 daemon 线程中运行)"""
         logger.info("正在连接行情服务器...")
         if not self.scanner.connect():
             logger.error("无法连接任何行情服务器")
             return
+        self._connected = True
 
         stocks = self.scanner.load_stock_list()
         logger.info("已加载 %d 只股票，扫描间隔: %d秒", len(stocks), self.interval)
@@ -89,6 +197,7 @@ class LiveSentinel:
                 if now.hour >= 15 and now.minute >= 1:
                     if self._max_level > AlertLevel.NORMAL:
                         self._log_daily_report()
+                    self._save_status()
                     logger.info("收盘，监控结束。")
                     break
                 # 非交易时段等待
@@ -110,6 +219,7 @@ class LiveSentinel:
                 self._empty_count = 0
 
                 result = self.engine.evaluate(snap)
+                self._last_result = result
                 line = format_alert_line(result)
                 print(line)
 

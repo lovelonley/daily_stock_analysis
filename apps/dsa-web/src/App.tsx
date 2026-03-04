@@ -1,5 +1,6 @@
 import type React from 'react';
 import {BrowserRouter as Router, Routes, Route, NavLink, useLocation, Navigate} from 'react-router-dom';
+import { useState, useEffect, useCallback } from 'react';
 import HomePage from './pages/HomePage';
 import BacktestPage from './pages/BacktestPage';
 import SettingsPage from './pages/SettingsPage';
@@ -7,6 +8,7 @@ import LoginPage from './pages/LoginPage';
 import NotFoundPage from './pages/NotFoundPage';
 import ChatPage from './pages/ChatPage';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { getMonitorStatus, type MonitorStatus } from './api/monitor';
 import './App.css';
 
 // 侧边导航图标
@@ -80,6 +82,75 @@ const NAV_ITEMS: DockItem[] = [
     },
 ];
 
+// 盘中监控状态指示
+const LEVEL_CONFIG: Record<string, { color: string; label: string; animate: boolean }> = {
+    offline: { color: '#606070', label: '离线', animate: false },
+    normal:  { color: '#00ff88', label: '正常', animate: false },
+    watch:   { color: '#ffaa00', label: '关注', animate: false },
+    warning: { color: '#ffaa00', label: '警告', animate: true },
+    danger:  { color: '#ff4466', label: '危险', animate: true },
+};
+
+const PHASE_LABEL: Record<string, string> = {
+    offline: '监控离线',
+    pre_market: '盘前',
+    live: '盘中监控',
+    lunch_break: '午休',
+    closed: '已收盘',
+};
+
+const useSentinelStatus = () => {
+    const [status, setStatus] = useState<MonitorStatus | null>(null);
+
+    const poll = useCallback(async () => {
+        try {
+            const data = await getMonitorStatus();
+            setStatus(data);
+        } catch {
+            setStatus(null);
+        }
+    }, []);
+
+    useEffect(() => {
+        poll();
+        const id = setInterval(poll, 10_000); // 10秒轮询
+        return () => clearInterval(id);
+    }, [poll]);
+
+    return status;
+};
+
+const SentinelDot: React.FC = () => {
+    const status = useSentinelStatus();
+    const level = status?.level ?? 'offline';
+    const phase = status?.phase ?? 'offline';
+    const cfg = LEVEL_CONFIG[level] ?? LEVEL_CONFIG.offline;
+
+    // 构建 tooltip
+    let tooltip = `${PHASE_LABEL[phase] ?? phase} · ${cfg.label}`;
+    if (status?.snapshot) {
+        const s = status.snapshot;
+        tooltip += `\n跌停:${s.limit_down} 涨停:${s.limit_up}`;
+        tooltip += `\n中位数:${(s.median_pct * 100).toFixed(2)}%`;
+        tooltip += `\n沪深300:${(s.csi300_pct * 100).toFixed(2)}%`;
+    }
+    if (status?.reasons && status.reasons.length > 0) {
+        tooltip += `\n${status.reasons.join(', ')}`;
+    }
+    if (status?.peak_limit_down != null && phase === 'closed') {
+        tooltip += `\n跌停峰值:${status.peak_limit_down}`;
+    }
+
+    return (
+        <div className="sentinel-dot-wrapper" title={tooltip}>
+            <span
+                className={`sentinel-dot${cfg.animate ? ' sentinel-dot--pulse' : ''}`}
+                style={{ backgroundColor: cfg.color, boxShadow: `0 0 6px ${cfg.color}` }}
+            />
+        </div>
+    );
+};
+
 // Dock 导航栏
 const DockNav: React.FC = () => {
     const {authEnabled, logout} = useAuth();
@@ -92,6 +163,8 @@ const DockNav: React.FC = () => {
                               d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
                     </svg>
                 </NavLink>
+
+                <SentinelDot />
 
                 <nav className="dock-items" aria-label="页面">
                     {NAV_ITEMS.map((item) => {
