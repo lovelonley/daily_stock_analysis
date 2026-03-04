@@ -103,7 +103,11 @@ def trigger_analysis(
     # 校验请求参数
     stock_codes = []
     if request.stock_code:
-        stock_codes.append(request.stock_code)
+        # 支持逗号分隔的多只股票
+        for c in request.stock_code.split(","):
+            c = c.strip()
+            if c:
+                stock_codes.append(c)
     if request.stock_codes:
         stock_codes.extend(request.stock_codes)
 
@@ -119,7 +123,23 @@ def trigger_analysis(
     # 统一大小写后去重，确保 ['aapl', 'AAPL'] 被识别为同一股票（Issue #355）
     stock_codes = [canonical_stock_code(c) for c in stock_codes]
     stock_codes = list(dict.fromkeys(stock_codes))
-    stock_code = stock_codes[0]  # 当前只处理第一个
+
+    # 多只股票：逐只提交异步任务
+    if len(stock_codes) > 1:
+        task_queue = get_task_queue()
+        accepted = []
+        for code in stock_codes:
+            try:
+                task = task_queue.submit(code, request.dry_run)
+                accepted.append({"stock_code": code, "task_id": task.task_id})
+            except Exception:
+                accepted.append({"stock_code": code, "task_id": None, "error": "提交失败或正在分析中"})
+        return JSONResponse(
+            status_code=202,
+            content={"message": f"已提交 {len(accepted)} 只股票", "tasks": accepted}
+        )
+
+    stock_code = stock_codes[0]
 
     # 异步模式：使用任务队列
     if request.async_mode:
