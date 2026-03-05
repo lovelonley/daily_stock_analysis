@@ -1,6 +1,6 @@
 import type React from 'react';
 import {BrowserRouter as Router, Routes, Route, NavLink, useLocation, Navigate} from 'react-router-dom';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import HomePage from './pages/HomePage';
 import BacktestPage from './pages/BacktestPage';
 import SettingsPage from './pages/SettingsPage';
@@ -124,7 +124,7 @@ const SentinelDot: React.FC = () => {
     const status = useSentinelStatus();
     const [hover, setHover] = useState(false);
     const [popupPos, setPopupPos] = useState<{top: number; left: number} | null>(null);
-    const dotRef = React.useRef<HTMLDivElement>(null);
+    const dotRef = useRef<HTMLDivElement>(null);
     const level = status?.level ?? 'offline';
     const phase = status?.phase ?? 'offline';
     const cfg = LEVEL_CONFIG[level] ?? LEVEL_CONFIG.offline;
