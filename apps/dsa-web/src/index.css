@@ -339,11 +339,9 @@ body {
   50% { opacity: 0.5; transform: scale(1.3); }
 }
 
-/* 悬浮卡片 */
+/* 悬浮卡片 (fixed 定位，避免被 dock-nav pointer-events 裁切) */
 .sentinel-popup {
-  position: absolute;
-  left: calc(100% + 12px);
-  top: 50%;
+  position: fixed;
   transform: translateY(-50%);
   background: var(--bg-elevated);
   border: 1px solid var(--border-accent);
@@ -351,7 +349,8 @@ body {
   padding: 10px 14px;
   min-width: 160px;
   white-space: nowrap;
-  z-index: 1000;
+  z-index: 9999;
+  pointer-events: none;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
   animation: sentinel-popup-in 0.15s ease-out;
 }

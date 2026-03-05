@@ -123,6 +123,8 @@ const useSentinelStatus = () => {
 const SentinelDot: React.FC = () => {
     const status = useSentinelStatus();
     const [hover, setHover] = useState(false);
+    const [popupPos, setPopupPos] = useState<{top: number; left: number} | null>(null);
+    const dotRef = React.useRef<HTMLDivElement>(null);
     const level = status?.level ?? 'offline';
     const phase = status?.phase ?? 'offline';
     const cfg = LEVEL_CONFIG[level] ?? LEVEL_CONFIG.offline;
@@ -152,18 +154,27 @@ const SentinelDot: React.FC = () => {
         if (status?.max_level_time) lines.push(`最高告警 ${status.max_level_time}`);
     }
 
+    const handleEnter = () => {
+        if (dotRef.current) {
+            const rect = dotRef.current.getBoundingClientRect();
+            setPopupPos({ top: rect.top + rect.height / 2, left: rect.right + 12 });
+        }
+        setHover(true);
+    };
+
     return (
         <div
+            ref={dotRef}
             className="sentinel-dot-wrapper"
-            onMouseEnter={() => setHover(true)}
+            onMouseEnter={handleEnter}
             onMouseLeave={() => setHover(false)}
         >
             <span
                 className={`sentinel-dot${cfg.animate ? ' sentinel-dot--pulse' : ''}`}
                 style={{ backgroundColor: cfg.color, boxShadow: `0 0 6px ${cfg.color}` }}
             />
-            {hover && (
-                <div className="sentinel-popup">
+            {hover && popupPos && (
+                <div className="sentinel-popup" style={{ top: popupPos.top, left: popupPos.left }}>
                     {lines.map((line, i) =>
                         line === '---'
                             ? <hr key={i} className="sentinel-popup-hr" />
