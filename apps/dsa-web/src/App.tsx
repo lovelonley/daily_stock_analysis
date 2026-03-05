@@ -122,31 +122,55 @@ const useSentinelStatus = () => {
 
 const SentinelDot: React.FC = () => {
     const status = useSentinelStatus();
+    const [hover, setHover] = useState(false);
     const level = status?.level ?? 'offline';
     const phase = status?.phase ?? 'offline';
     const cfg = LEVEL_CONFIG[level] ?? LEVEL_CONFIG.offline;
 
-    // 构建 tooltip
-    let tooltip = `${PHASE_LABEL[phase] ?? phase} · ${cfg.label}`;
+    // 构建详情行
+    const lines: string[] = [];
+    lines.push(`${PHASE_LABEL[phase] ?? phase} · ${cfg.label}`);
+
     if (status?.snapshot) {
         const s = status.snapshot;
-        tooltip += `\n跌停:${s.limit_down} 涨停:${s.limit_up}`;
-        tooltip += `\n中位数:${(s.median_pct * 100).toFixed(2)}%`;
-        tooltip += `\n沪深300:${(s.csi300_pct * 100).toFixed(2)}%`;
+        lines.push(`跌停 ${s.limit_down}  涨停 ${s.limit_up}`);
+        lines.push(`中位数 ${(s.median_pct * 100).toFixed(2)}%`);
+        lines.push(`沪深300 ${(s.csi300_pct * 100).toFixed(2)}%`);
+        lines.push(`下跌占比 ${(s.decline_ratio * 100).toFixed(0)}%`);
     }
+
     if (status?.reasons && status.reasons.length > 0) {
-        tooltip += `\n${status.reasons.join(', ')}`;
+        lines.push('---');
+        status.reasons.forEach(r => lines.push(r));
     }
-    if (status?.peak_limit_down != null && phase === 'closed') {
-        tooltip += `\n跌停峰值:${status.peak_limit_down}`;
+
+    // 收盘/盘前 显示摘要
+    if ((phase === 'closed' || phase === 'pre_market') && !status?.snapshot) {
+        if (status?.date) lines.push(status.date);
+        if (status?.peak_limit_down != null) lines.push(`跌停峰值 ${status.peak_limit_down}`);
+        if (status?.last_csi300 != null) lines.push(`沪深300 ${(status.last_csi300 * 100).toFixed(2)}%`);
+        if (status?.max_level_time) lines.push(`最高告警 ${status.max_level_time}`);
     }
 
     return (
-        <div className="sentinel-dot-wrapper" title={tooltip}>
+        <div
+            className="sentinel-dot-wrapper"
+            onMouseEnter={() => setHover(true)}
+            onMouseLeave={() => setHover(false)}
+        >
             <span
                 className={`sentinel-dot${cfg.animate ? ' sentinel-dot--pulse' : ''}`}
                 style={{ backgroundColor: cfg.color, boxShadow: `0 0 6px ${cfg.color}` }}
             />
+            {hover && (
+                <div className="sentinel-popup">
+                    {lines.map((line, i) =>
+                        line === '---'
+                            ? <hr key={i} className="sentinel-popup-hr" />
+                            : <div key={i} className={i === 0 ? 'sentinel-popup-title' : 'sentinel-popup-line'}>{line}</div>
+                    )}
+                </div>
+            )}
         </div>
     );
 };
